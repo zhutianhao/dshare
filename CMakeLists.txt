@@ -18,6 +18,12 @@ add_executable(fileshare
     mainwindow.cpp
     fileserver.cpp
     updirproxy.h
+    discovery.cpp
+    discovery.h
+    remotemodel.cpp
+    remotemodel.h
+    finddialog.cpp
+    finddialog.h
 )
 
 target_link_libraries(fileshare PRIVATE

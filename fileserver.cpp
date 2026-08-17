@@ -7,6 +7,9 @@
 #include <QHttpHeaders>
 #include <QHttpServerRequest>
 #include <QHttpServerResponder>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMimeDatabase>
 #include <QNetworkInterface>
 #include <QUrl>
@@ -101,7 +104,13 @@ QString FileServer::safePath(const QString &rel)
     if (root.isEmpty())
         return QString();
 
-    const QString abs = QDir(root).filePath(rel);
+    // rel 可能以 "/" 开头（如远程模型传来的 "/sub"），filePath 会把
+    // 绝对路径原样返回而忽略 root，需先去掉前导斜杠再拼接。
+    QString r = rel;
+    while (r.startsWith(QLatin1Char('/')))
+        r.remove(0, 1);
+
+    const QString abs = QDir(root).filePath(r);
     const QFileInfo info(abs);
     if (info.exists()) {
         const QString c = info.canonicalFilePath();
@@ -202,8 +211,9 @@ QByteArray FileServer::renderDirectory(const QDir &dir, const QString &relPath) 
 
     body += QStringLiteral("<hr><table border=\"0\" cellpadding=\"4\">");
     for (const QFileInfo &fi : entries) {
-        const QString rel = relPath + QLatin1Char('/') + fi.fileName();
-        const QString link = QStringLiteral("/browse/%1").arg(urlEncode(rel.mid(1)));
+    const QString rel = relPath.isEmpty() ? fi.fileName()
+                                           : (relPath + QLatin1Char('/') + fi.fileName());
+    const QString link = QStringLiteral("/browse/%1").arg(urlEncode(rel));
         QString type = fi.isDir() ? QStringLiteral("目录") : QStringLiteral("%1 字节").arg(fi.size());
         body += QStringLiteral("<tr><td><a href=\"%1\">%2</a></td><td>%3</td></tr>")
                     .arg(link, htmlEscape(fi.fileName()), htmlEscape(type));
@@ -218,10 +228,43 @@ QByteArray FileServer::renderDirectory(const QDir &dir, const QString &relPath) 
 void FileServer::handleRequest(const QHttpServerRequest &request, QHttpServerResponder &responder)
 {
     const QUrl url = request.url();
-    const QString path = url.path();
+    // 使用 FullyDecoded：路径中的 %2F 等会被正确还原为 '/',
+    // 所以 "/browse/test%2Ffileshare" 能正确解析为子目录下的文件。
+    const QString path = url.path(QUrl::FullyDecoded);
     const QUrlQuery query(url);
 
     if (request.method() == QHttpServerRequest::Method::Get) {
+        // 结构化目录列表接口：供其他 deepin 客户端（本程序）拉取并展示。
+        if (path == QStringLiteral("/api/list")) {
+            const QString rel = query.queryItemValue(QStringLiteral("path"),
+                                                     QUrl::FullyDecoded);
+            const QString abs = safePath(rel);
+            if (abs.isEmpty() || !QFileInfo(abs).isDir()) {
+                responder.write(QHttpServerResponder::StatusCode::Forbidden);
+                return;
+            }
+            const QFileInfoList entries = QDir(abs).entryInfoList(
+                QDir::AllEntries | QDir::NoDotAndDotDot,
+                QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+            QJsonArray arr;
+            for (const QFileInfo &fi : entries) {
+                QJsonObject o;
+                o[QStringLiteral("name")] = fi.fileName();
+                o[QStringLiteral("isDir")] = fi.isDir();
+                o[QStringLiteral("size")] = fi.isDir() ? 0 : fi.size();
+                arr.append(o);
+            }
+            QJsonObject root;
+            root[QStringLiteral("path")] = rel;
+            root[QStringLiteral("entries")] = arr;
+            QHttpHeaders hdr;
+            hdr.append(QHttpHeaders::WellKnownHeader::ContentType,
+                       QByteArray("application/json; charset=utf-8"));
+            responder.write(QJsonDocument(root).toJson(QJsonDocument::Compact), hdr,
+                            QHttpServerResponder::StatusCode::Ok);
+            return;
+        }
+
         QString rel;
         if (path == QStringLiteral("/") || path == QStringLiteral("/browse")
             || path == QStringLiteral("/browse/")) {
