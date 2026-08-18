@@ -11,8 +11,10 @@
 // 远程文件拖拽使用的自定义 MIME 类型（携带机器 ip/port 与文件相对路径）。
 inline constexpr char kRemoteFileMime[] = "application/x-fileshare-remote";
 
+class AuthManager;
+
 // 远程客户端（另一台运行本程序的 deepin 机器）共享目录的扁平列表模型。
-// 通过 HTTP GET 对方 5000 端口的 /api/list 接口获取 JSON 目录列表，
+// 通过 HTTPS GET 对方 5000 端口的 /api/list 接口获取 JSON 目录列表，
 // 不支持写入（只读浏览）。在非根目录下于列表顶部插入一个“返回上一级”伪项。
 struct RemoteEntry
 {
@@ -39,6 +41,8 @@ public:
 
     // 设置要浏览的远程目标，并拉取根目录。
     void setTarget(const QString &name, const QString &ip, quint16 port = 5000);
+    // 设置共享的授权管理器（用于访问需授权的共享端时自动完成握手）。
+    void setAuthManager(AuthManager *mgr);
     // 进入指定相对路径（如 "" 表示根，"/sub" 表示子目录）。
     void cd(const QString &relPath);
     void cdUp();
@@ -89,4 +93,5 @@ private:
     QString m_localShareRoot; // 本机共享根目录，用于计算缓存落点
     QList<RemoteEntry> m_entries;
     class QNetworkAccessManager *m_nam = nullptr;
+    AuthManager *m_auth = nullptr; // 共享授权管理器（可为空）
 };

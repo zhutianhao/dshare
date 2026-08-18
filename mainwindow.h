@@ -8,6 +8,7 @@
 
 #include "fileserver.h"
 #include "remotemodel.h"
+#include "authmanager.h"
 
 QT_BEGIN_NAMESPACE
 class QListView;
@@ -46,7 +47,9 @@ private slots:
     void paste();
     void onFilesDropped(const QMimeData *mime, const QModelIndex &index, bool internal);
     void onCustomContextMenu(const QPoint &pos);
-    void onToggleShare(bool on);
+    void onToggleRequireAuth(bool on);
+    void onAuthRequested(const QString &token, const QString &name, const QString &ip);
+    void processAuthQueue();
     void updateShareInfo();
 
     void onMachineChanged(int index);
@@ -61,10 +64,12 @@ private:
     QString localDropTargetDir(const QModelIndex &index) const;
     QString remoteDropTargetRel(const QModelIndex &index) const;
     void startDownload(const QString &ip, quint16 port, const QString &relPath,
-                       const QString &name, const QString &destPath, bool openAfter);
+                       const QString &name, const QString &destPath, bool openAfter,
+                       const QString &authHeader = QString());
     void downloadRemoteFile(const QString &ip, quint16 port, const QString &relPath,
                             const QString &name, const QString &destDir);
-    bool uploadLocalFile(const QString &localPath, const QString &destRel);
+    bool uploadLocalFile(const QString &localPath, const QString &destRel,
+                         const QString &authHeader = QString());
 
 private:
     QString currentDir() const;
@@ -97,6 +102,17 @@ private:
 
     FileServer *m_fileServer = nullptr;
     QString m_shareRoot;
+
+    // 授权请求弹窗队列（共享端收到他人访问请求时按序弹出）
+    struct AuthReq
+    {
+        QString token;
+        QString name;
+        QString ip;
+    };
+    QList<AuthReq> m_authQueue;
+    bool m_authDlgOpen = false;
+    AuthManager *m_auth = nullptr;
 
     // 局域网发现与远程浏览
     Discovery *m_discovery = nullptr;

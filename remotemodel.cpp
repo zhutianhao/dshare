@@ -1,5 +1,7 @@
 #include "remotemodel.h"
 
+#include "authmanager.h"
+
 #include <DIconTheme>
 #include <QMimeData>
 
@@ -10,6 +12,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSslError>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -44,6 +47,11 @@ void RemoteFileModel::setTarget(const QString &name, const QString &ip, quint16 
     m_port = port;
     m_rel.clear();
     doFetch();
+}
+
+void RemoteFileModel::setAuthManager(AuthManager *mgr)
+{
+    m_auth = mgr;
 }
 
 void RemoteFileModel::cd(const QString &relPath)
@@ -250,7 +258,7 @@ void RemoteFileModel::doFetch()
                         .arg(m_name, m_ip, m_rel.isEmpty() ? QStringLiteral("/") : m_rel));
 
     QUrl url;
-    url.setScheme(QStringLiteral("http"));
+    url.setScheme(QStringLiteral("https"));
     url.setHost(m_ip);
     url.setPort(m_port);
     url.setPath(QStringLiteral("/api/list"));
@@ -258,7 +266,16 @@ void RemoteFileModel::doFetch()
     q.addQueryItem(QStringLiteral("path"), m_rel);
     url.setQuery(q);
 
-    m_nam->get(QNetworkRequest(url));
+    QNetworkRequest req(url);
+    // 若已通过授权握手，携带授权头访问。
+    if (m_auth) {
+        const QString header = m_auth->headerFor(m_ip, m_port);
+        if (!header.isEmpty())
+            req.setRawHeader(QByteArrayLiteral("Authorization"), header.toUtf8());
+    }
+    QNetworkReply *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::sslErrors, reply,
+            [reply](const QList<QSslError> &) { reply->ignoreSslErrors(); });
 }
 
 void RemoteFileModel::onFinished(QNetworkReply *reply)
@@ -269,6 +286,34 @@ void RemoteFileModel::onFinished(QNetworkReply *reply)
     reply->deleteLater();
 
     if (reply->error() != QNetworkReply::NoError) {
+        // 需要授权（401）：未授权过时自动发起握手并重试一次；已授权仍失败则清除缓存报错。
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 401 && m_auth) {
+            const QString cached = m_auth->headerFor(m_ip, m_port);
+            if (cached.isEmpty()) {
+                emit logMessage(tr("需要授权，正在请求共享端批准…"));
+                m_auth->ensureHeader(m_ip, m_port, [this](const QString &header) {
+                    if (!header.isEmpty()) {
+                        doFetch(); // 握手成功，带授权头重试
+                    } else {
+                        emit logMessage(tr("授权被拒绝，无法访问该共享"));
+                        beginResetModel();
+                        m_entries.clear();
+                        endResetModel();
+                        emit listingChanged();
+                    }
+                });
+                return;
+            }
+            // 已带授权头仍 401（凭据失效/被撤销）：清除缓存，等待下次重试。
+            m_auth->invalidate(m_ip, m_port);
+            emit logMessage(tr("授权无效或已被撤销，无法访问该共享"));
+            beginResetModel();
+            m_entries.clear();
+            endResetModel();
+            emit listingChanged();
+            return;
+        }
         emit logMessage(tr("获取远程目录失败：%1").arg(reply->errorString()));
         beginResetModel();
         m_entries.clear();

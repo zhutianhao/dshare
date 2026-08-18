@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include <DComboBox>
+#include <DDialog>
 #include <DIconTheme>
 #include <DInputDialog>
 #include <DStatusBar>
@@ -14,7 +15,9 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QDir>
+#include <memory>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
@@ -32,6 +35,7 @@
 #include <QNetworkInterface>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSslError>
 #include <QPushButton>
 #include <QShortcut>
 #include <QUrl>
@@ -157,9 +161,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_pasteBtn->setEnabled(false);
     m_pathLabel = new QLabel(this);
     m_pathLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
-    auto *shareLabel = new QLabel(tr("共享"), this);
+    auto *shareLabel = new QLabel(tr("访问需授权"), this);
+    shareLabel->setContentsMargins(0, 0, 0, 0);
+    shareLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_shareSwitch = new DSwitchButton(this);
-    m_shareSwitch->setChecked(true);
+    m_shareSwitch->setChecked(false);
+    m_shareSwitch->setToolTip(tr("开启后，其他设备访问您的共享需经您批准"));
+
+    // Keep the label and switch tightly grouped so the text isn't pushed away from
+    // the button by the surrounding toolbar spacing / switch's internal padding.
+    auto *shareWidget = new QWidget(this);
+    auto *shareLayout = new QHBoxLayout(shareWidget);
+    shareLayout->setContentsMargins(0, 0, 0, 0);
+    shareLayout->setSpacing(0);
+    shareLayout->addWidget(shareLabel);
+    shareLayout->addWidget(m_shareSwitch);
 
     auto *top = new QWidget(this);
     auto *topLayout = new QHBoxLayout(top);
@@ -169,8 +185,8 @@ MainWindow::MainWindow(QWidget *parent)
     topLayout->addWidget(refreshBtn);
     topLayout->addWidget(m_copyBtn);
     topLayout->addWidget(m_pasteBtn);
-    topLayout->addWidget(shareLabel);
-    topLayout->addWidget(m_shareSwitch);
+    topLayout->addStretch(1); // push the auth group to the right side
+    topLayout->addWidget(shareWidget);
 
     // ---- 地址栏（机器选择 + 当前目录 + 添加按钮）----
     m_machineCombo = new DComboBox(this);
@@ -212,6 +228,13 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_fileServer, &FileServer::logMessage, this, [this](const QString &msg) {
         m_msgLabel->setText(msg);
     });
+    connect(m_fileServer, &FileServer::authRequested, this, &MainWindow::onAuthRequested);
+
+    // ---- 授权管理器（客户端侧共享握手）----
+    m_auth = new AuthManager(this);
+    connect(m_auth, &AuthManager::logMessage, this, [this](const QString &msg) {
+        m_msgLabel->setText(msg);
+    });
 
     // ---- 局域网发现 + 远程浏览 ----
     m_discovery = new Discovery(this);
@@ -220,6 +243,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     m_remoteModel = new RemoteFileModel(this);
     m_remoteModel->setLocalShareRoot(m_shareRoot);
+    m_remoteModel->setAuthManager(m_auth);
     connect(m_remoteModel, &RemoteFileModel::logMessage, this, [this](const QString &msg) {
         m_msgLabel->setText(msg);
     });
@@ -246,7 +270,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_view, &QListView::customContextMenuRequested, this, &MainWindow::onCustomContextMenu);
     connect(m_view, &FileListView::filesDropped, this, &MainWindow::onFilesDropped);
     connect(m_view, &FileListView::remoteFileDragged, this, &MainWindow::onRemoteFileDragged);
-    connect(m_shareSwitch, &DSwitchButton::toggled, this, &MainWindow::onToggleShare);
+    connect(m_shareSwitch, &DSwitchButton::toggled, this, &MainWindow::onToggleRequireAuth);
     connect(m_machineCombo, QOverload<int>::of(&DComboBox::currentIndexChanged),
             this, &MainWindow::onMachineChanged);
     connect(m_addBtn, &DPushButton::clicked, this, &MainWindow::onAddMachine);
@@ -268,7 +292,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     setCurrentDir(m_shareRoot);
     updateShareInfo();
-    onToggleShare(true); // start sharing on launch
+    // 启动即开启共享服务（开关仅控制“是否需要授权”，默认关闭）。
+    if (!m_fileServer->start(5000))
+        m_shareSwitch->setEnabled(false);
+    updateShareInfo();
 }
 
 MainWindow::~MainWindow() = default;
@@ -558,20 +585,32 @@ QString MainWindow::remoteDropTargetRel(const QModelIndex &index) const
 }
 
 void MainWindow::startDownload(const QString &ip, quint16 port, const QString &relPath,
-                                const QString &name, const QString &destPath, bool openAfter)
+                                const QString &name, const QString &destPath, bool openAfter,
+                                const QString &authHeader)
 {
     QDir().mkpath(QFileInfo(destPath).absolutePath());
     QUrl url;
-    url.setScheme(QStringLiteral("http"));
+    url.setScheme(QStringLiteral("https"));
     url.setHost(ip);
     url.setPort(port);
     url.setPath(QStringLiteral("/browse") + relPath); // relPath 形如 "/file.txt"
     QNetworkRequest req(url);
+    QString header = authHeader;
+    if (header.isEmpty() && m_auth)
+        header = m_auth->headerFor(ip, port);
+    if (!header.isEmpty())
+        req.setRawHeader(QByteArrayLiteral("Authorization"), header.toUtf8());
     QNetworkReply *reply = m_xfer->get(req);
+    connect(reply, &QNetworkReply::sslErrors, reply,
+            [reply](const QList<QSslError> &) { reply->ignoreSslErrors(); });
     reply->setProperty("op", QStringLiteral("download"));
-    reply->setProperty("destPath", destPath);
+    reply->setProperty("ip", ip);
+    reply->setProperty("port", port);
+    reply->setProperty("relPath", relPath);
     reply->setProperty("name", name);
+    reply->setProperty("destPath", destPath);
     reply->setProperty("open", openAfter);
+    reply->setProperty("authTried", !header.isEmpty() || (m_auth && !m_auth->headerFor(ip, port).isEmpty()));
     m_msgLabel->setText(tr("正在下载：%1").arg(name));
 }
 
@@ -588,27 +627,42 @@ void MainWindow::onRemoteFileDragged(const RemoteFileRef &ref, const QString &ca
     startDownload(ref.ip, ref.port, ref.relPath, ref.name, cachePath, false);
 }
 
-bool MainWindow::uploadLocalFile(const QString &localPath, const QString &destRel)
+bool MainWindow::uploadLocalFile(const QString &localPath, const QString &destRel,
+                                  const QString &authHeader)
 {
     QFile f(localPath);
     if (!f.open(QIODevice::ReadOnly))
         return false;
     const QFileInfo fi(localPath);
     const QString name = fi.fileName();
+    const QString ip = m_remoteModel->remoteIp();
+    const quint16 port = m_remoteModel->remotePort();
     QUrl url;
-    url.setScheme(QStringLiteral("http"));
-    url.setHost(m_remoteModel->remoteIp());
-    url.setPort(m_remoteModel->remotePort());
+    url.setScheme(QStringLiteral("https"));
+    url.setHost(ip);
+    url.setPort(port);
     url.setPath(QStringLiteral("/upload") + (destRel.isEmpty() ? QStringLiteral("/") : destRel));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("name"), name);
     url.setQuery(q);
     QNetworkRequest req(url);
+    QString header = authHeader;
+    if (header.isEmpty() && m_auth)
+        header = m_auth->headerFor(ip, port);
+    if (!header.isEmpty())
+        req.setRawHeader(QByteArrayLiteral("Authorization"), header.toUtf8());
     const QByteArray data = f.readAll();
     f.close();
     QNetworkReply *reply = m_xfer->post(req, data);
+    connect(reply, &QNetworkReply::sslErrors, reply,
+            [reply](const QList<QSslError> &) { reply->ignoreSslErrors(); });
     reply->setProperty("op", QStringLiteral("upload"));
     reply->setProperty("name", name);
+    reply->setProperty("ip", ip);
+    reply->setProperty("port", port);
+    reply->setProperty("localPath", localPath);
+    reply->setProperty("destRel", destRel);
+    reply->setProperty("authTried", !header.isEmpty());
     m_msgLabel->setText(tr("正在上传：%1").arg(name));
     return true;
 }
@@ -620,6 +674,32 @@ void MainWindow::onTransferFinished(QNetworkReply *reply)
     const QString op = reply->property("op").toString();
     const QString name = reply->property("name").toString();
     const QByteArray data = reply->readAll();
+    // 需要授权（401）且尚未尝试过授权：自动握手后带授权头重试一次。
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (status == 401 && !reply->property("authTried").toBool()
+        && (op == QStringLiteral("download") || op == QStringLiteral("upload"))) {
+        const QString ip = reply->property("ip").toString();
+        const quint16 port = quint16(reply->property("port").toInt());
+        const QString relPath = reply->property("relPath").toString();
+        const QString destPath = reply->property("destPath").toString();
+        const bool open = reply->property("open").toBool();
+        const QString localPath = reply->property("localPath").toString();
+        const QString destRel = reply->property("destRel").toString();
+        m_msgLabel->setText(tr("需要授权，正在请求共享端批准…"));
+        m_auth->ensureHeader(ip, port, [=](const QString &header) {
+            if (header.isEmpty()) {
+                m_msgLabel->setText(tr("授权被拒绝，无法%1：%2")
+                                       .arg(op == QStringLiteral("download") ? tr("下载") : tr("上传"), name));
+                return;
+            }
+            if (op == QStringLiteral("download"))
+                startDownload(ip, port, relPath, name, destPath, open, header);
+            else
+                uploadLocalFile(localPath, destRel, header);
+        });
+        reply->deleteLater();
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError) {
         m_msgLabel->setText(tr("%1失败：%2").arg(op == QStringLiteral("download")
                                                     ? tr("下载") : tr("上传"),
@@ -827,32 +907,70 @@ void MainWindow::onRemotePathChanged(const QString &)
     updateAddressBar();
 }
 
-void MainWindow::onToggleShare(bool on)
+void MainWindow::onToggleRequireAuth(bool on)
 {
-    if (on) {
-        if (!m_fileServer->start(5000))
-            m_shareSwitch->setChecked(false);
-    } else {
-        m_fileServer->stop();
-    }
+    m_fileServer->setRequireAuth(on);
     updateShareInfo();
+}
+
+void MainWindow::onAuthRequested(const QString &token, const QString &name, const QString &ip)
+{
+    m_authQueue.append({ token, name, ip });
+    processAuthQueue();
+}
+
+void MainWindow::processAuthQueue()
+{
+    if (m_authDlgOpen)
+        return;
+    if (m_authQueue.isEmpty())
+        return;
+    m_authDlgOpen = true;
+    const AuthReq r = m_authQueue.takeFirst();
+
+    auto *dlg = new DDialog(this);
+    dlg->setTitle(tr("授权请求"));
+    dlg->setMessage(tr("有设备请求访问您的共享文件：\n机器名：%1\nIP：%2")
+                       .arg(r.name, r.ip));
+    dlg->addButton(tr("拒绝"), false, DDialog::ButtonNormal);
+    dlg->addButton(tr("允许"), true, DDialog::ButtonRecommend);
+    auto resolved = std::make_shared<bool>(false);
+    connect(dlg, &DDialog::buttonClicked, this, [this, dlg, r, resolved](int idx) {
+        const bool allow = (idx == 1);
+        *resolved = true;
+        m_fileServer->resolveAuth(r.token, allow);
+        dlg->deleteLater();
+    });
+    connect(dlg, &QDialog::finished, this, [this, dlg, r, resolved]() {
+        if (!*resolved)
+            m_fileServer->resolveAuth(r.token, false); // 用户直接关闭，视为拒绝
+        m_authDlgOpen = false;
+        dlg->deleteLater();
+        processAuthQueue();
+    });
+    dlg->exec();
 }
 
 void MainWindow::updateShareInfo()
 {
-    QString localUrl = QStringLiteral("http://localhost:5000");
+    QString localUrl = QStringLiteral("https://localhost:5000");
     QString lanUrl;
     const QList<QHostAddress> addrs = QNetworkInterface::allAddresses();
     for (const QHostAddress &a : addrs) {
         if (a.protocol() == QAbstractSocket::IPv4Protocol && a != QHostAddress::LocalHost) {
-            lanUrl = QStringLiteral("http://%1:5000").arg(a.toString());
+            lanUrl = QStringLiteral("https://%1:5000").arg(a.toString());
             break;
         }
     }
-    QString text = m_fileServer->isRunning()
-                       ? tr("Web 访问（本机）：%1    局域网：%2")
-                             .arg(localUrl, lanUrl.isEmpty() ? tr("无网络连接") : lanUrl)
-                       : tr("共享已关闭");
+    QString text;
+    if (m_fileServer->isRunning()) {
+        text = tr("Web 访问（本机）：%1    局域网：%2%3")
+                   .arg(localUrl,
+                        lanUrl.isEmpty() ? tr("无网络连接") : lanUrl,
+                        m_fileServer->requireAuth() ? tr("（需授权）") : QString());
+    } else {
+        text = tr("共享未启动");
+    }
     m_urlLabel->setText(text);
 }
 
