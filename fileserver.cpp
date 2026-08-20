@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2026  zhutianhao <zhutianhao75@hotmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #include "fileserver.h"
 
 #include <QByteArray>
@@ -217,7 +234,7 @@ bool FileServer::setupSsl()
 {
     const QString dir =
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
-        + QStringLiteral("/fileshare");
+        + QStringLiteral("/dshare");
     QDir().mkpath(dir);
     const QString certPath = dir + QStringLiteral("/server.crt");
     const QString keyPath = dir + QStringLiteral("/server.key");
@@ -280,7 +297,7 @@ bool FileServer::generateCert(const QString &certPath, const QString &keyPath)
         QStringLiteral("-keyout"), keyPath,
         QStringLiteral("-out"), certPath,
         QStringLiteral("-days"), QStringLiteral("3650"),
-        QStringLiteral("-subj"), QStringLiteral("/CN=fileshare"),
+        QStringLiteral("-subj"), QStringLiteral("/CN=dshare"),
         QStringLiteral("-addext"), QStringLiteral("subjectAltName=") + san.join(QLatin1Char(',')),
     });
     p.start();

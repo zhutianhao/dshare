@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DShare
+Name[zh_CN]=DShare
+Comment=基于 DTK 开发的 deepin 桌面文件共享工具，在本地浏览共享目录，并通过浏览器共享文件
+Comment[zh_CN]=基于 DTK 开发的 deepin 桌面文件共享工具，在本地浏览共享目录，并通过浏览器共享文件
+Exec=dshare
+Icon=folder
+Terminal=false
+Categories=Utility;FileTools;

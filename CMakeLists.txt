@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(fileshare VERSION 1.0.0 LANGUAGES CXX)
+project(dshare VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,7 +13,7 @@ find_package(Dtk6Gui REQUIRED)
 find_package(Dtk6Widget REQUIRED)
 find_package(Dtk6Log REQUIRED)
 
-add_executable(fileshare
+add_executable(dshare
     main.cpp
     mainwindow.cpp
     fileserver.cpp
@@ -28,7 +28,7 @@ add_executable(fileshare
     finddialog.h
 )
 
-target_link_libraries(fileshare PRIVATE
+target_link_libraries(dshare PRIVATE
     Qt6::Core
     Qt6::Widgets
     Qt6::Network
@@ -39,17 +39,17 @@ target_link_libraries(fileshare PRIVATE
     Dtk6::Log
 )
 
-install(TARGETS fileshare RUNTIME DESTINATION bin)
-install(FILES fileshare.desktop DESTINATION share/applications)
+install(TARGETS dshare RUNTIME DESTINATION bin)
+install(FILES dshare.desktop DESTINATION share/applications)
 
 # Translations: DApplication::loadTranslator() looks for <appName>_<locale>.qm in
-# AppDataLocation/translations (e.g. /usr/share/fileshare/translations and
-# ~/.local/share/fileshare/translations) and in <bindir>/translations. Install the
+# AppDataLocation/translations (e.g. /usr/share/dshare/translations and
+# ~/.local/share/dshare/translations) and in <bindir>/translations. Install the
 # qm system-wide and copy it next to the binary so an uninstalled build run also finds it.
-set(FILESHARE_QM ${CMAKE_CURRENT_SOURCE_DIR}/translations/fileshare_zh_CN.qm)
-install(FILES ${FILESHARE_QM} DESTINATION share/fileshare/translations)
-add_custom_command(TARGET fileshare POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:fileshare>/translations
-    COMMAND ${CMAKE_COMMAND} -E copy ${FILESHARE_QM}
-            $<TARGET_FILE_DIR:fileshare>/translations/fileshare_zh_CN.qm
+set(DSHARE_QM ${CMAKE_CURRENT_SOURCE_DIR}/translations/dshare_zh_CN.qm)
+install(FILES ${DSHARE_QM} DESTINATION share/dshare/translations)
+add_custom_command(TARGET dshare POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:dshare>/translations
+    COMMAND ${CMAKE_COMMAND} -E copy ${DSHARE_QM}
+            $<TARGET_FILE_DIR:dshare>/translations/dshare_zh_CN.qm
     COMMENT "Copying translation file next to the binary")

@@ -2,7 +2,7 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="zh_CN">
 <context>
-    <name>fileshare</name>
+    <name>dshare</name>
     <message>
         <source>File Share</source>
         <translation>文件共享</translation>
