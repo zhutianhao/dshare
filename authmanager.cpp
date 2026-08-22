@@ -46,7 +46,7 @@ void AuthManager::invalidate(const QString &ip, quint16 port)
     m_waiters.remove(host);
 }
 
-void AuthManager::ensureHeader(const QString &ip, quint16 port,
+void AuthManager::ensureHeader(const QString &ip, quint16 port, bool secure,
                                const std::function<void(const QString &)> &cb)
 {
     const QString host = ip + QLatin1Char(':') + QString::number(port);
@@ -61,7 +61,7 @@ void AuthManager::ensureHeader(const QString &ip, quint16 port,
     }
     m_inProgress[host] = true;
     m_waiters[host].append(cb);
-    doHandshake(ip, port, [this, host](const QString &header) {
+    doHandshake(ip, port, secure, [this, host](const QString &header) {
         m_inProgress[host] = false;
         if (!header.isEmpty())
             m_cache[host] = header;
@@ -71,12 +71,12 @@ void AuthManager::ensureHeader(const QString &ip, quint16 port,
     });
 }
 
-void AuthManager::doHandshake(const QString &ip, quint16 port,
+void AuthManager::doHandshake(const QString &ip, quint16 port, bool secure,
                               const std::function<void(const QString &)> &cb)
 {
     const QString token = randomHex(16);
     QUrl url;
-    url.setScheme(QStringLiteral("https"));
+    url.setScheme(secure ? QStringLiteral("https") : QStringLiteral("http"));
     url.setHost(ip);
     url.setPort(port);
     url.setPath(QStringLiteral("/api/auth"));

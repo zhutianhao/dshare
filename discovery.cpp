@@ -75,6 +75,11 @@ QString Discovery::localIp() const
     return QString();
 }
 
+void Discovery::setSecure(bool secure)
+{
+    m_secure = secure;
+}
+
 void Discovery::startQuery(const QString &pattern)
 {
     m_pattern = pattern;
@@ -140,7 +145,8 @@ void Discovery::onReadyRead()
             // 过滤掉“自己”（极端情况下本机也收到自己应答）。
             if (name == localMachineName() && ip == localIp())
                 continue;
-            emit peerDiscovered(name, ip);
+            const bool secure = obj.value(QStringLiteral("secure")).toBool(true);
+            emit peerDiscovered(name, ip, secure);
         }
     }
 }
@@ -153,6 +159,7 @@ void Discovery::sendResponse(const QHostAddress &target)
     obj[QStringLiteral("type")] = QStringLiteral("response");
     obj[QStringLiteral("name")] = localMachineName();
     obj[QStringLiteral("ip")] = localIp();
+    obj[QStringLiteral("secure")] = m_secure;
     const QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Compact);
     // 单播回查询方（查询方发现套接字绑定在 Port 上，可收到）。
     m_socket->writeDatagram(data, target, Port);

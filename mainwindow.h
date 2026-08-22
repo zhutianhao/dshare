@@ -46,6 +46,7 @@ struct MachineInfo
     bool isLocal = true;
     QString name; // 机器名（本机为本地主机名）
     QString ip;   // 局域网 IP（本机可空）
+    bool secure = true; // 远程共享是否以 HTTPS 提供（决定客户端所用协议）
 };
 
 class MainWindow : public Dtk::Widget::DMainWindow
@@ -71,7 +72,7 @@ private slots:
 
     void onMachineChanged(int index);
     void onAddMachine();
-    void onPeerSelected(const QString &name, const QString &ip);
+    void onPeerSelected(const QString &name, const QString &ip, bool secure);
     void onRemotePathChanged(const QString &relPath);
     void updateCopyBtn();
     void onTransferFinished(QNetworkReply *reply);
@@ -99,7 +100,7 @@ private:
     void showLocal();
     void showRemote(const MachineInfo &m);
     void updateAddressBar();
-    void addMachine(const QString &name, const QString &ip);
+    void addMachine(const QString &name, const QString &ip, bool secure);
 
     QFileSystemModel *m_model = nullptr;
     UpDirProxy *m_proxy = nullptr;
@@ -112,9 +113,9 @@ private:
     QLabel *m_urlLabel = nullptr;
     QLabel *m_msgLabel = nullptr;
 
-    // 地址栏：机器选择下拉框 + 添加按钮
+    // 地址栏：机器选择下拉框（末项固定为“添加客户端”）+ 当前目录二维码
     Dtk::Widget::DComboBox *m_machineCombo = nullptr;
-    Dtk::Widget::DPushButton *m_addBtn = nullptr;
+    QLabel *m_qrLabel = nullptr; // 当前共享目录的网页二维码，供手机扫码打开
     QMetaObject::Connection m_selConn;
 
     FileServer *m_fileServer = nullptr;
@@ -137,6 +138,19 @@ private:
     QList<MachineInfo> m_machines;
     bool m_remote = false;
     int m_currentMachine = 0;
+    bool m_remoteSecure = true; // 当前远程共享所用协议是否为 HTTPS
     QNetworkAccessManager *m_xfer = nullptr;
+
+    // 当前共享目录对应的网页访问地址（供二维码使用）。
+    QString currentShareUrl() const;
+    // 用 libqrencode 生成指定尺寸的二维码位图（失败返回空）。
+    QPixmap generateQr(const QString &text, int px) const;
+    // 刷新二维码（依据当前目录与共享地址）；远程浏览时禁用。
+    void updateQrCode();
+    // 弹出二维码大图预览（含地址与复制按钮）。
+    void showQrPreview();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 };
 

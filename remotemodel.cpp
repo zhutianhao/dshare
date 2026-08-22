@@ -57,11 +57,12 @@ RemoteFileModel::RemoteFileModel(QObject *parent)
     connect(m_nam, &QNetworkAccessManager::finished, this, &RemoteFileModel::onFinished);
 }
 
-void RemoteFileModel::setTarget(const QString &name, const QString &ip, quint16 port)
+void RemoteFileModel::setTarget(const QString &name, const QString &ip, quint16 port, bool secure)
 {
     m_name = name;
     m_ip = ip;
     m_port = port;
+    m_secure = secure;
     m_rel.clear();
     doFetch();
 }
@@ -275,7 +276,7 @@ void RemoteFileModel::doFetch()
                         .arg(m_name, m_ip, m_rel.isEmpty() ? QStringLiteral("/") : m_rel));
 
     QUrl url;
-    url.setScheme(QStringLiteral("https"));
+    url.setScheme(m_secure ? QStringLiteral("https") : QStringLiteral("http"));
     url.setHost(m_ip);
     url.setPort(m_port);
     url.setPath(QStringLiteral("/api/list"));
@@ -309,7 +310,7 @@ void RemoteFileModel::onFinished(QNetworkReply *reply)
             const QString cached = m_auth->headerFor(m_ip, m_port);
             if (cached.isEmpty()) {
                 emit logMessage(tr("需要授权，正在请求共享端批准…"));
-                m_auth->ensureHeader(m_ip, m_port, [this](const QString &header) {
+                m_auth->ensureHeader(m_ip, m_port, m_secure, [this](const QString &header) {
                     if (!header.isEmpty()) {
                         doFetch(); // 握手成功，带授权头重试
                     } else {

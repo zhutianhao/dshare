@@ -64,6 +64,11 @@ quint16 FileServer::port() const
     return m_port;
 }
 
+bool FileServer::isSecure() const
+{
+    return m_secure;
+}
+
 bool FileServer::isRunning() const
 {
     return m_tcp && m_tcp->isListening();
@@ -165,7 +170,15 @@ bool FileServer::start(quint16 port)
 
     m_server = new QHttpServer(this);
 
-    const bool useSsl = setupSsl();
+    // 需要授权时走 HTTPS，保护授权凭据；否则明文 HTTP，避免自签证书告警。
+    const bool useSsl = m_authRequired;
+    if (useSsl && !setupSsl()) {
+        emit logMessage(tr("SSL 证书不可用，无法以加密方式启动共享服务"));
+        delete m_server;
+        m_server = nullptr;
+        return false;
+    }
+
     if (useSsl) {
         auto *ssl = new QSslServer(m_server);
         QSslConfiguration conf = ssl->sslConfiguration();
@@ -190,9 +203,10 @@ bool FileServer::start(quint16 port)
             return false;
         }
         m_tcp = ssl;
+        m_secure = true;
         emit logMessage(tr("文件共享已启动（HTTPS），监听端口 %1").arg(port));
     } else {
-        // 回退：证书不可用则使用明文 HTTP，并明确告警。
+        // 未开启授权：使用明文 HTTP，浏览器等访问无自签证书告警。
         auto *tcp = new QTcpServer(m_server);
         if (!tcp->listen(QHostAddress::Any, port)) {
             emit logMessage(tr("无法监听端口 %1：%2").arg(port).arg(tcp->errorString()));
@@ -207,7 +221,8 @@ bool FileServer::start(quint16 port)
             return false;
         }
         m_tcp = tcp;
-        emit logMessage(tr("文件共享已启动（明文 HTTP，SSL 不可用）：%1").arg(port));
+        m_secure = false;
+        emit logMessage(tr("文件共享已启动（明文 HTTP），监听端口 %1").arg(port));
     }
 
     m_server->setMissingHandler(this, [this](const QHttpServerRequest &request,

@@ -27,7 +27,7 @@
 //
 // 协议（UDP，端口 Discovery::Port，组播组 Discovery::Group）：
 //   查询：{"type":"discover","pattern":"<机器名正则表达式>"}
-//   响应：{"type":"response","name":"<本机机器名>","ip":"<本机局域网IP>"}
+//   响应：{"type":"response","name":"<本机机器名>","ip":"<本机局域网IP>","secure":<是否HTTPS>}
 //
 // 所有客户端启动时即加入组播组并持续监听，因此随时可以应答他人的查询。
 // 应答方收到 discover 后用正则比对自身机器名，命中则按
@@ -47,14 +47,16 @@ public:
     QString localMachineName() const;
     // 本机局域网 IPv4 地址（非回环），应答 / 延迟计算使用。
     QString localIp() const;
+    // 设置本机共享服务的加密状态，广播应答时一并上报，供对端选择协议。
+    void setSecure(bool secure);
 
     void startQuery(const QString &pattern);
     void stopQuery();
     bool isQuerying() const;
 
 signals:
-    // 收到他人应答时发出（可能重复，由调用方去重）。
-    void peerDiscovered(const QString &name, const QString &ip);
+    // 收到他人应答时发出（可能重复，由调用方去重）。secure 表示对方是否 HTTPS。
+    void peerDiscovered(const QString &name, const QString &ip, bool secure);
     void logMessage(const QString &msg);
 
 private slots:
@@ -70,4 +72,5 @@ private:
     QUdpSocket *m_socket = nullptr;
     QTimer *m_queryTimer = nullptr;
     QString m_pattern;
+    bool m_secure = true; // 本机共享是否以 HTTPS 运行（广播上报）
 };

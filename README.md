@@ -16,13 +16,14 @@
 
 - **本地文件管理**：基于 DTK 的图形界面，浏览共享目录 `~/myshare`，支持
   新建文件夹、复制/粘贴、拖拽移动/复制、删除、双击打开。
-- **Web 文件共享**：程序启动时自动在 **5000 端口** 开启 HTTP/HTTPS 服务。
-  其他设备用浏览器打开 `https://<你的IP>:5000` 即可：
+- **Web 文件共享**：程序启动时自动在 **5000 端口** 开启服务，可访问地址显示在
+  窗口底部状态栏（随「访问需授权」开关在 `http://` / `https://` 间切换）：
   - 浏览目录（带路径导航、文件大小展示）
   - 下载单个文件
   - 通过网页表单上传文件、新建文件夹
-  - 优先使用 **HTTPS**（自动用 `openssl` 生成自签名证书并写入本机 LAN IP 到
-    SAN，减少浏览器告警）；证书不可用时回退到明文 HTTP 并给出提示。
+  - **未开启授权时使用明文 HTTP**，浏览器直接访问、无自签证书告警；
+  - **开启授权时使用 HTTPS**（自动用 `openssl` 生成自签名证书并写入本机 LAN IP
+    到 SAN），以加密保护授权凭据，浏览器会提示证书不受信任，选择「继续访问」即可。
 - **局域网设备发现**：基于多播（UDP 端口 5001 / 组播组 `239.255.42.99`）自动
   发现同局域网内其它运行本程序的 deepin 机器。可按**机器名正则**发起查找，避免
   手动记 IP。
@@ -35,6 +36,11 @@
   需经你**手动批准**。授权请求会弹出提示框显示对方机器名与 IP；浏览器端通过
   自动握手 + Cookie 完成授权，桌面客户端通过 `AuthManager` 自动完成握手，无需
   用户记忆任何口令。
+- **手机扫码访问**：地址栏「机器」下拉框右侧有一个二维码，实时对应**本机当前
+  共享目录**的网页地址。手机扫码即可在浏览器打开该目录（未开启授权为明文 HTTP，
+  无证书告警）；**点击二维码弹出大图预览**（含地址与「复制地址」按钮）。进入
+  远程浏览时该二维码自动禁用。「添加客户端」入口已并入下拉框的末项
+  「+ 添加客户端…」，选中即可查找并连接其它设备。
 
 ---
 
@@ -83,19 +89,22 @@ sudo make install      # 可执行文件 -> /usr/bin，桌面项 -> /usr/share/a
 
 ### 2. 通过浏览器共享 / 访问
 
-- **本机访问**：浏览器打开 <https://localhost:5000>
-- **局域网访问**：窗口底部状态栏会显示 `局域网：https://<你的IP>:5000`，
+- **本机访问**：浏览器打开状态栏显示的地址（如 <http://localhost:5000>）。
+- **局域网访问**：窗口底部状态栏会显示当前可访问地址——**未开启授权** 为
+  `http://<你的IP>:5000`，**开启授权** 为 `https://<你的IP>:5000`，
   把该地址发给同局域网的其他人即可。
 - 在网页中可浏览目录、点击文件下载、使用表单上传文件或新建文件夹。
-- 浏览器会提示自签名证书不受信任，选择「继续访问」即可（证书仅用于加密，
-  不提供第三方信任链）。
+- 仅当「访问需授权」开启（HTTPS）时，浏览器会提示自签名证书不受信任，
+  选择「继续访问」即可（证书仅用于加密授权凭据，不提供第三方信任链）；
+  **未开启授权** 时为明文 HTTP，可直接访问、无安全提示。
 
 ### 3. 发现并连接其它设备
 
 1. 点击工具栏 `添加`，弹出「查找」对话框。
 2. 输入目标机器名（作为**正则表达式**，留空/`.*` 匹配全部），点击「查找」。
 3. 程序持续发送多播查询，下方列表会显示应答的机器（已去重）。
-4. 双击列表中的机器，即把它加入地址栏「机器」下拉框并切换过去。
+4. 双击列表中的机器，即把它加入地址栏「机器」下拉框并切换过去。也可直接在下
+   拉框末项「+ 添加客户端…」触发查找对话框。
 
 ### 4. 与远程设备互传文件
 
@@ -113,6 +122,21 @@ sudo make install      # 可执行文件 -> /usr/bin，桌面项 -> /usr/share/a
   **机器名与 IP**，可选择「允许」或「拒绝」。
 - 超时（5 分钟）未处理视为拒绝；关闭开关会清空所有在途/已批准授权。
 - 对浏览器与桌面客户端均生效，授权过程对终端用户透明。
+- 开启授权后共享服务自动切换为 **HTTPS（加密）** 以保护授权凭据；关闭时则
+  用明文 **HTTP**，浏览器等访问不再有证书告警。协议随开关自动切换并重启服务。
+
+### 6. 手机扫码访问当前目录
+
+地址栏「机器」下拉框右侧显示本机**当前共享目录**对应的网页二维码：
+
+- 手机（需与本机在同一局域网）扫码，即在浏览器打开该目录页面，浏览 / 下载文件。
+- 二维码地址随当前目录与「访问需授权」开关实时刷新：未开启授权为
+  `http://<本机IP>:5000/browse/...`（无证书告警），开启授权为
+  `https://<本机IP>:5000/browse/...`。
+- **点击二维码** 弹出大图预览，可长按/扫码，或用「复制地址」按钮把访问地址
+  复制到剪贴板，方便发给他人。
+- 进入**远程浏览**（选中其它设备）时，该二维码自动禁用，因为此时展示的是
+  对方的目录、而非本机共享。
 
 ---
 
@@ -120,7 +144,7 @@ sudo make install      # 可执行文件 -> /usr/bin，桌面项 -> /usr/share/a
 
 | 用途 | 协议 | 端口 | 说明 |
 |------|------|------|------|
-| Web 文件服务 | HTTPS（回退 HTTP） | 5000 | 浏览 / 下载 / 上传 / 授权接口 |
+| Web 文件服务 | HTTP（未授权）/ HTTPS（需授权） | 5000 | 协议随「访问需授权」开关自动切换 |
 | 局域网发现 | UDP 多播 | 5001 | 组播组 `239.255.42.99` |
 
 ---
@@ -163,15 +187,17 @@ download, and upload files via a browser or another instance of this app.
 
 - Native DTK6 GUI, consistent with the deepin / UOS v25 desktop look and feel.
 - Local management of `~/myshare` (create folder, copy/paste, drag-drop, delete).
-- Built-in web server on **port 5000** (HTTPS with auto-generated self-signed
-  cert, falls back to plain HTTP). Browse, download, upload, and create folders
-  from any browser at `https://<ip>:5000`.
+- Built-in web server on **port 5000**. When access authorization is **off** it
+  serves plain **HTTP** (no self-signed cert warning); when **on** it serves
+  **HTTPS** with an auto-generated self-signed cert to protect credentials.
+  Browse, download, upload, and create folders from any browser.
 - LAN peer discovery via multicast (UDP 5001, group `239.255.42.99`), with
   machine-name regex matching.
 - Read-only remote browsing of other peers, with drag-to-download /
   drag-to-upload file transfer.
 - Optional **access authorization**: when enabled, every access must be approved
-  by the host via a dialog showing the requester's machine name and IP.
+  by the host via a dialog showing the requester's machine name and IP. Enabling
+  it switches the web service to HTTPS to protect the authorization credentials.
 
 **Build**
 

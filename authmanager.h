@@ -38,8 +38,8 @@ public:
     QString headerFor(const QString &ip, quint16 port) const;
 
     // 确保持有有效的授权头：命中缓存则立即回调；否则执行一次握手，
-    // 成功后回调 "token-authcode"，失败回调空字符串。
-    void ensureHeader(const QString &ip, quint16 port,
+    // 成功后回调 "token-authcode"，失败回调空字符串。secure 表示对方是否 HTTPS。
+    void ensureHeader(const QString &ip, quint16 port, bool secure,
                       const std::function<void(const QString &)> &cb);
 
     // 使某 host 的缓存失效（如授权被拒或凭据失效后），便于下次重新握手。
@@ -49,7 +49,7 @@ signals:
     void logMessage(const QString &msg);
 
 private:
-    void doHandshake(const QString &ip, quint16 port,
+    void doHandshake(const QString &ip, quint16 port, bool secure,
                      const std::function<void(const QString &)> &cb);
     static QString localMachineName();
     static QString localIp();

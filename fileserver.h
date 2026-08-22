@@ -37,6 +37,8 @@ public:
     void stop();
     bool isRunning() const;
     quint16 port() const;
+    // 当前是否以加密方式（HTTPS）运行：访问需授权时为 true，否则为明文 HTTP。
+    bool isSecure() const;
     void setShareRoot(const QString &path);
     QString shareRoot() const;
 
@@ -76,6 +78,7 @@ private:
     QTcpServer *m_tcp = nullptr;
     QString m_shareRoot;
     quint16 m_port = 5000;
+    bool m_secure = false;     // 当前是否以 HTTPS 运行
     bool m_destroying = false; // 析构进行中，停止向 UI 发射信号
 
     // SSL

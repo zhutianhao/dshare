@@ -81,21 +81,24 @@ void FindDialog::onFindClicked()
     }
 }
 
-void FindDialog::onPeerDiscovered(const QString &name, const QString &ip)
+void FindDialog::onPeerDiscovered(const QString &name, const QString &ip, bool secure)
 {
-    addResult(name, ip);
+    addResult(name, ip, secure);
 }
 
-void FindDialog::addResult(const QString &name, const QString &ip)
+void FindDialog::addResult(const QString &name, const QString &ip, bool secure)
 {
     const QString key = name + QLatin1Char('@') + ip;
     if (m_seen.contains(key))
         return;
     m_seen.insert(key);
 
-    auto *item = new QListWidgetItem(QStringLiteral("%1  (%2)").arg(name, ip));
+    const QString scheme = secure ? QStringLiteral("https") : QStringLiteral("http");
+    auto *item = new QListWidgetItem(
+        QStringLiteral("%1  (%2, %3)").arg(name, ip, scheme));
     item->setData(Qt::UserRole, name);
     item->setData(Qt::UserRole + 1, ip);
+    item->setData(Qt::UserRole + 2, secure);
     m_list->addItem(item);
 }
 
@@ -105,10 +108,11 @@ void FindDialog::onItemDoubleClicked(QListWidgetItem *item)
         return;
     const QString name = item->data(Qt::UserRole).toString();
     const QString ip = item->data(Qt::UserRole + 1).toString();
+    const bool secure = item->data(Qt::UserRole + 2).toBool();
     if (name.isEmpty() || ip.isEmpty())
         return;
     m_discovery->stopQuery();
     m_findBtn->setText(tr("查找"));
-    emit peerSelected(name, ip);
+    emit peerSelected(name, ip, secure);
     accept();
 }

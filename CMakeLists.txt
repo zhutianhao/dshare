@@ -37,6 +37,7 @@ target_link_libraries(dshare PRIVATE
     Dtk6::Gui
     Dtk6::Widget
     Dtk6::Log
+    qrencode
 )
 
 install(TARGETS dshare RUNTIME DESTINATION bin)

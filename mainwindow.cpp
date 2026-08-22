@@ -25,6 +25,15 @@
 #include <DSwitchButton>
 #include <DTitlebar>
 
+#include <qrencode.h>
+
+#include <QCursor>
+#include <QDialog>
+#include <QEvent>
+#include <QImage>
+#include <QPixmap>
+#include <QVBoxLayout>
+
 #include "discovery.h"
 #include "finddialog.h"
 #include "remotemodel.h"
@@ -205,11 +214,18 @@ MainWindow::MainWindow(QWidget *parent)
     topLayout->addStretch(1); // push the auth group to the right side
     topLayout->addWidget(shareWidget);
 
-    // ---- 地址栏（机器选择 + 当前目录 + 添加按钮）----
+    // ---- 地址栏（机器选择 + 当前目录 + 二维码）----
     m_machineCombo = new DComboBox(this);
     m_machineCombo->setMinimumWidth(180);
     m_machineCombo->addItem(tr("本机"));
-    m_addBtn = new DPushButton(tr("添加"), this);
+    // 末项固定为“添加客户端…”，选中即弹出查找对话框（见 onMachineChanged）。
+    m_machineCombo->addItem(tr("+ 添加客户端…"));
+    // 二维码：手机扫码直接打开本机当前共享目录的网页。
+    m_qrLabel = new QLabel(this);
+    m_qrLabel->setFixedSize(32, 32);
+    m_qrLabel->setScaledContents(true);
+    m_qrLabel->setCursor(Qt::PointingHandCursor);
+    m_qrLabel->installEventFilter(this);
     auto *addrBar = new QWidget(this);
     auto *addrLayout = new QHBoxLayout(addrBar);
     addrLayout->setContentsMargins(10, 6, 10, 6);
@@ -217,7 +233,7 @@ MainWindow::MainWindow(QWidget *parent)
     addrLayout->addWidget(new QLabel(tr("机器："), this));
     addrLayout->addWidget(m_machineCombo);
     addrLayout->addWidget(m_pathLabel, 1);
-    addrLayout->addWidget(m_addBtn);
+    addrLayout->addWidget(m_qrLabel);
 
     auto *central = new QWidget(this);
     auto *centralLayout = new QVBoxLayout(central);
@@ -290,7 +306,6 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_shareSwitch, &DSwitchButton::toggled, this, &MainWindow::onToggleRequireAuth);
     connect(m_machineCombo, QOverload<int>::of(&DComboBox::currentIndexChanged),
             this, &MainWindow::onMachineChanged);
-    connect(m_addBtn, &DPushButton::clicked, this, &MainWindow::onAddMachine);
 
     auto *copyShortcut = new QShortcut(QKeySequence::Copy, m_view);
     connect(copyShortcut, &QShortcut::activated, this, &MainWindow::copySelection);
@@ -312,7 +327,10 @@ MainWindow::MainWindow(QWidget *parent)
     // 启动即开启共享服务（开关仅控制“是否需要授权”，默认关闭）。
     if (!m_fileServer->start(5000))
         m_shareSwitch->setEnabled(false);
+    // 本机广播携带当前协议（HTTP/HTTPS），供其他 dshare 客户端据此连接。
+    m_discovery->setSecure(m_fileServer->isSecure());
     updateShareInfo();
+    updateQrCode();
 }
 
 MainWindow::~MainWindow() = default;
@@ -337,6 +355,7 @@ void MainWindow::setCurrentDir(const QString &path)
 {
     m_proxy->setCurrentDir(path);
     m_pathLabel->setText(relativePath(path));
+    updateQrCode();
 }
 
 void MainWindow::refreshView()
@@ -607,7 +626,7 @@ void MainWindow::startDownload(const QString &ip, quint16 port, const QString &r
 {
     QDir().mkpath(QFileInfo(destPath).absolutePath());
     QUrl url;
-    url.setScheme(QStringLiteral("https"));
+    url.setScheme(m_remoteSecure ? QStringLiteral("https") : QStringLiteral("http"));
     url.setHost(ip);
     url.setPort(port);
     url.setPath(QStringLiteral("/browse") + relPath); // relPath 形如 "/file.txt"
@@ -655,7 +674,7 @@ bool MainWindow::uploadLocalFile(const QString &localPath, const QString &destRe
     const QString ip = m_remoteModel->remoteIp();
     const quint16 port = m_remoteModel->remotePort();
     QUrl url;
-    url.setScheme(QStringLiteral("https"));
+    url.setScheme(m_remoteSecure ? QStringLiteral("https") : QStringLiteral("http"));
     url.setHost(ip);
     url.setPort(port);
     url.setPath(QStringLiteral("/upload") + (destRel.isEmpty() ? QStringLiteral("/") : destRel));
@@ -703,7 +722,7 @@ void MainWindow::onTransferFinished(QNetworkReply *reply)
         const QString localPath = reply->property("localPath").toString();
         const QString destRel = reply->property("destRel").toString();
         m_msgLabel->setText(tr("需要授权，正在请求共享端批准…"));
-        m_auth->ensureHeader(ip, port, [=](const QString &header) {
+        m_auth->ensureHeader(ip, port, m_remoteSecure, [=](const QString &header) {
             if (header.isEmpty()) {
                 m_msgLabel->setText(tr("授权被拒绝，无法%1：%2")
                                        .arg(op == QStringLiteral("download") ? tr("下载") : tr("上传"), name));
@@ -859,6 +878,7 @@ void MainWindow::showLocal()
                            && QApplication::clipboard()->mimeData()->hasUrls());
     setCurrentDir(m_shareRoot); // 重置代理到共享根目录并刷新
     updateAddressBar();
+    updateQrCode();
 
     if (m_selConn)
         disconnect(m_selConn);
@@ -869,17 +889,19 @@ void MainWindow::showLocal()
 void MainWindow::showRemote(const MachineInfo &m)
 {
     m_remote = true;
+    m_remoteSecure = m.secure;
     m_view->setModel(m_remoteModel);
     m_view->setRootIndex(QModelIndex());
     m_view->setAcceptDrops(true);  // 允许把本地文件拖入以“上传”
     m_view->setDragEnabled(true); // 允许把远程文件拖出以“下载”
     m_copyBtn->setEnabled(false);
     m_pasteBtn->setEnabled(false);
-    m_remoteModel->setTarget(m.name, m.ip, 5000);
+    m_remoteModel->setTarget(m.name, m.ip, 5000, m.secure);
     updateAddressBar();
+    updateQrCode(); // 远程浏览时禁用本机共享二维码
 }
 
-void MainWindow::addMachine(const QString &name, const QString &ip)
+void MainWindow::addMachine(const QString &name, const QString &ip, bool secure)
 {
     for (const MachineInfo &m : m_machines) {
         if (!m.isLocal && m.name == name && m.ip == ip)
@@ -889,14 +911,25 @@ void MainWindow::addMachine(const QString &name, const QString &ip)
     m.isLocal = false;
     m.name = name;
     m.ip = ip;
+    m.secure = secure;
     m_machines.append(m);
-    m_machineCombo->addItem(QStringLiteral("%1 (%2)").arg(name, ip));
+    // 插入到末项“添加客户端…”之前，保持其为下拉框最后一项。
+    m_machineCombo->insertItem(m_machineCombo->count() - 1,
+                               QStringLiteral("%1 (%2)").arg(name, ip));
     m_machineCombo->setCurrentIndex(m_machines.size() - 1); // 自动选中新加入的机器
 }
 
 void MainWindow::onMachineChanged(int index)
 {
-    if (index < 0 || index >= m_machines.size() || index == m_currentMachine)
+    if (index < 0)
+        return;
+    // 选中末项“添加客户端…”：还原原选中项并弹出查找对话框。
+    if (index == m_machineCombo->count() - 1) {
+        m_machineCombo->setCurrentIndex(m_currentMachine);
+        onAddMachine();
+        return;
+    }
+    if (index == m_currentMachine || index >= m_machines.size())
         return;
     m_currentMachine = index;
     const MachineInfo &m = m_machines.at(index);
@@ -914,9 +947,9 @@ void MainWindow::onAddMachine()
     dlg->exec();
 }
 
-void MainWindow::onPeerSelected(const QString &name, const QString &ip)
+void MainWindow::onPeerSelected(const QString &name, const QString &ip, bool secure)
 {
-    addMachine(name, ip);
+    addMachine(name, ip, secure);
 }
 
 void MainWindow::onRemotePathChanged(const QString &)
@@ -927,7 +960,19 @@ void MainWindow::onRemotePathChanged(const QString &)
 void MainWindow::onToggleRequireAuth(bool on)
 {
     m_fileServer->setRequireAuth(on);
+    // 授权开关会改变所用协议（HTTPS/HTTP），重启服务使其立即生效。
+    if (m_fileServer->isRunning()) {
+        if (!m_fileServer->start(5000)) {
+            m_shareSwitch->setEnabled(false);
+            m_discovery->setSecure(false);
+            updateShareInfo();
+            return;
+        }
+    }
+    // 本机广播的协议随之变化，通知局域网内的其他 dshare 客户端。
+    m_discovery->setSecure(m_fileServer->isSecure());
     updateShareInfo();
+    updateQrCode();
 }
 
 void MainWindow::onAuthRequested(const QString &token, const QString &name, const QString &ip)
@@ -970,12 +1015,15 @@ void MainWindow::processAuthQueue()
 
 void MainWindow::updateShareInfo()
 {
-    QString localUrl = QStringLiteral("https://localhost:5000");
+    // 按实际协议（HTTPS/HTTP）展示访问地址，避免给用明文 HTTP 的用户显示错误的 https。
+    const QString scheme = m_fileServer->isSecure()
+        ? QStringLiteral("https") : QStringLiteral("http");
+    QString localUrl = QStringLiteral("%1://localhost:5000").arg(scheme);
     QString lanUrl;
     const QList<QHostAddress> addrs = QNetworkInterface::allAddresses();
     for (const QHostAddress &a : addrs) {
         if (a.protocol() == QAbstractSocket::IPv4Protocol && a != QHostAddress::LocalHost) {
-            lanUrl = QStringLiteral("https://%1:5000").arg(a.toString());
+            lanUrl = QStringLiteral("%1://%2:5000").arg(scheme, a.toString());
             break;
         }
     }
@@ -989,6 +1037,131 @@ void MainWindow::updateShareInfo()
         text = tr("共享未启动");
     }
     m_urlLabel->setText(text);
+}
+
+QString MainWindow::currentShareUrl() const
+{
+    // 二维码指向本机当前共享目录对应的网页：<scheme>://<局域网IP>:5000/browse/<相对路径>
+    const QString scheme = m_fileServer->isSecure()
+        ? QStringLiteral("https") : QStringLiteral("http");
+    QString host;
+    const QList<QHostAddress> addrs = QNetworkInterface::allAddresses();
+    for (const QHostAddress &a : addrs) {
+        if (a.protocol() == QAbstractSocket::IPv4Protocol && a != QHostAddress::LocalHost) {
+            host = a.toString();
+            break;
+        }
+    }
+    if (host.isEmpty())
+        host = QStringLiteral("localhost");
+    const QString rel = QDir(m_shareRoot).relativeFilePath(m_proxy->currentDir())
+        .replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QString path = QStringLiteral("/browse/")
+        + QString::fromLatin1(QUrl::toPercentEncoding(rel));
+    QUrl url;
+    url.setScheme(scheme);
+    url.setHost(host);
+    url.setPort(5000);
+    url.setPath(path);
+    return url.toString();
+}
+
+QPixmap MainWindow::generateQr(const QString &text, int px) const
+{
+    if (text.isEmpty())
+        return QPixmap();
+    const QByteArray data = text.toUtf8();
+    QRcode *qr = QRcode_encodeString(data.constData(), 0,
+                                     QR_ECLEVEL_M, QR_MODE_8, 1);
+    if (!qr)
+        return QPixmap();
+    const int n = qr->width;
+    const int quiet = 4;                 // 标准静区（模块数）
+    const int total = n + quiet * 2;
+    const int scale = qMax(1, px / total);
+    const int size = total * scale;
+
+    QImage img(size, size, QImage::Format_Mono);
+    img.setColor(0, qRgb(0, 0, 0));     // 黑
+    img.setColor(1, qRgb(255, 255, 255)); // 白
+    img.fill(1);
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            if (qr->data[y * n + x] & 1) {
+                for (int dy = 0; dy < scale; ++dy)
+                    for (int dx = 0; dx < scale; ++dx)
+                        img.setPixel(quiet * scale + x * scale + dx,
+                                     quiet * scale + y * scale + dy, 0);
+            }
+        }
+    }
+    QRcode_free(qr);
+    return QPixmap::fromImage(img);
+}
+
+void MainWindow::updateQrCode()
+{
+    if (!m_qrLabel)
+        return;
+    // 远程浏览时不提供本机共享二维码，禁用并给出占位提示。
+    if (m_remote) {
+        m_qrLabel->setEnabled(false);
+        m_qrLabel->setToolTip(tr("远程浏览中，二维码不可用"));
+        m_qrLabel->setText(tr("远程"));
+        return;
+    }
+    m_qrLabel->setEnabled(true);
+    const QString url = currentShareUrl();
+    m_qrLabel->setToolTip(tr("点击放大预览；扫码在手机浏览器打开：%1").arg(url));
+    const QPixmap pm = generateQr(url, 128);
+    if (pm.isNull())
+        m_qrLabel->setText(tr("二维码\n不可用"));
+    else
+        m_qrLabel->setPixmap(pm);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_qrLabel && event->type() == QEvent::MouseButtonRelease) {
+        if (!m_remote)
+            showQrPreview();
+        return true;
+    }
+    return DMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::showQrPreview()
+{
+    if (m_remote)
+        return;
+    const QString url = currentShareUrl();
+    const QPixmap pm = generateQr(url, 320);
+    if (pm.isNull())
+        return;
+
+    auto *dlg = new QDialog(this);
+    dlg->setWindowTitle(tr("扫码访问"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    auto *layout = new QVBoxLayout(dlg);
+    layout->setContentsMargins(16, 16, 16, 16);
+    layout->setSpacing(12);
+
+    auto *img = new QLabel(dlg);
+    img->setPixmap(pm);
+    img->setAlignment(Qt::AlignCenter);
+    layout->addWidget(img);
+
+    layout->addWidget(new QLabel(url, dlg));
+
+    auto *copyBtn = new DPushButton(tr("复制地址"), dlg);
+    layout->addWidget(copyBtn);
+    connect(copyBtn, &DPushButton::clicked, this, [this, url]() {
+        QApplication::clipboard()->setText(url);
+        m_msgLabel->setText(tr("已复制访问地址：%1").arg(url));
+    });
+
+    dlg->setFixedSize(pm.width() + 48, pm.height() + 96);
+    dlg->exec();
 }
 
 #include "mainwindow.moc"

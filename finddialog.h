@@ -37,16 +37,16 @@ public:
     explicit FindDialog(Discovery *discovery, QWidget *parent = nullptr);
 
 signals:
-    // 选中某台机器后发出，由主窗口加入地址栏下拉框。
-    void peerSelected(const QString &name, const QString &ip);
+    // 选中某台机器后发出，由主窗口加入地址栏下拉框。secure 表示对方是否 HTTPS。
+    void peerSelected(const QString &name, const QString &ip, bool secure);
 
 private slots:
     void onFindClicked();
-    void onPeerDiscovered(const QString &name, const QString &ip);
+    void onPeerDiscovered(const QString &name, const QString &ip, bool secure);
     void onItemDoubleClicked(QListWidgetItem *item);
 
 private:
-    void addResult(const QString &name, const QString &ip);
+    void addResult(const QString &name, const QString &ip, bool secure);
 
     Discovery *m_discovery = nullptr;
     Dtk::Widget::DLineEdit *m_input = nullptr;

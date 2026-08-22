@@ -57,7 +57,8 @@ public:
     explicit RemoteFileModel(QObject *parent = nullptr);
 
     // 设置要浏览的远程目标，并拉取根目录。
-    void setTarget(const QString &name, const QString &ip, quint16 port = 5000);
+    // secure 表示对方是否以 HTTPS 提供（决定客户端所用协议）。
+    void setTarget(const QString &name, const QString &ip, quint16 port = 5000, bool secure = true);
     // 设置共享的授权管理器（用于访问需授权的共享端时自动完成握手）。
     void setAuthManager(AuthManager *mgr);
     // 进入指定相对路径（如 "" 表示根，"/sub" 表示子目录）。
@@ -106,6 +107,7 @@ private:
     QString m_name;
     QString m_ip;
     quint16 m_port = 5000;
+    bool m_secure = true;     // 远程共享是否以 HTTPS 提供
     QString m_rel;            // 当前相对路径："" 或 "/sub/..."
     QString m_localShareRoot; // 本机共享根目录，用于计算缓存落点
     QList<RemoteEntry> m_entries;
