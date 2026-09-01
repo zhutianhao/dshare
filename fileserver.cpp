@@ -404,21 +404,65 @@ QByteArray FileServer::renderDirectory(const QDir &dir, const QString &relPath) 
     }
     body += QStringLiteral("</p>");
 
-    // Upload form
+    // Upload form：使用 XHR 分片上传，实时显示进度并在上传期间禁用按钮，
+    // 避免重复提交；分片同时让服务端无需把整个文件缓冲进内存（支持大文件）。
     body += QStringLiteral(
         "<form id=\"up\"><input type=\"file\" id=\"file\" required>"
-        "<button type=\"submit\">上传到当前目录</button>"
+        "<button type=\"submit\" id=\"upbtn\">上传到当前目录</button>"
         "<span id=\"msg\"></span></form>"
+        "<div id=\"progwrap\" style=\"display:none;margin:6px 0\">"
+        "<progress id=\"bar\" value=\"0\" max=\"100\" style=\"width:260px;vertical-align:middle\">"
+        "</progress><span id=\"pct\">0%</span></div>"
         "<script>"
-        "document.getElementById('up').onsubmit=async function(e){"
-        "e.preventDefault();"
-        "var f=document.getElementById('file').files[0];"
-        "if(!f)return;"
-        "var rel=\"%1\";"
-        "var r=await fetch('/upload/'+rel+'?name='+encodeURIComponent(f.name),{method:'POST',body:f});"
-        "document.getElementById('msg').textContent=r.ok?'上传成功':'上传失败';"
-        "setTimeout(function(){location.reload();},600);"
+        "(function(){"
+        "var CH=4*1024*1024;"
+        "var form=document.getElementById('up'),fi=document.getElementById('file'),"
+        "btn=document.getElementById('upbtn'),msg=document.getElementById('msg'),"
+        "wrap=document.getElementById('progwrap'),bar=document.getElementById('bar'),"
+        "pct=document.getElementById('pct'),rel=\"%1\";"
+        "function fmt(n){"
+        " if(n<1024)return n+' B';"
+        " if(n<1048576)return (n/1024).toFixed(1)+' KB';"
+        " if(n<1073741824)return (n/1048576).toFixed(1)+' MB';"
+        " return (n/1073741824).toFixed(2)+' GB';"
+        "}"
+        "function setProg(done,total){"
+        " var p=total>0?done*100/total:0;"
+        " bar.value=p;"
+        " pct.textContent=p.toFixed(1)+'\\u0025 ('+fmt(done)+' / '+fmt(total)+')';"
+        "}"
+        "function done(ok,text){"
+        " fi.disabled=false;btn.disabled=false;msg.textContent=text;"
+        " if(ok)setTimeout(function(){location.reload();},600);"
+        "}"
+        "form.onsubmit=function(e){"
+        " e.preventDefault();"
+        " var f=fi.files[0];"
+        " if(!f||btn.disabled)return;"
+        " btn.disabled=true;fi.disabled=true;wrap.style.display='block';msg.textContent='';"
+        " setProg(0,f.size);"
+        " var t0=Date.now();"
+        " function put(off){"
+        "  var end=Math.min(off+CH,f.size);"
+        "  var xhr=new XMLHttpRequest();"
+        "  xhr.open('POST','/upload/'+rel+'?name='+encodeURIComponent(f.name)"
+        "           +'&offset='+off+'&total='+f.size);"
+        "  xhr.upload.onprogress=function(ev){setProg(off+ev.loaded,f.size);};"
+        "  xhr.onload=function(){"
+        "   if(xhr.status>=200&&xhr.status<300){"
+        "    setProg(end,f.size);"
+        "    if(end<f.size){put(end);return;}"
+        "    var sec=(Date.now()-t0)/1000;"
+        "    var sp=sec>0?'，平均 '+fmt(f.size/sec)+'/s':'';"
+        "    done(true,'上传完成'+sp);"
+        "   }else{done(false,'上传失败（HTTP '+xhr.status+'）');}"
+        "  };"
+        "  xhr.onerror=function(){done(false,'上传失败：网络错误');};"
+        "  xhr.send(f.slice(off,end));"
+        " }"
+        " put(0);"
         "};"
+        "})();"
         "</script>")
                 .arg(urlEncode(relPath));
 
@@ -605,12 +649,16 @@ void FileServer::handleRequest(const QHttpServerRequest &request, QHttpServerRes
             responder.write(renderDirectory(QDir(abs), rel), hdr,
                            QHttpServerResponder::StatusCode::Ok);
         } else if (info.isFile()) {
-            QFile f(abs);
-            if (!f.open(QIODevice::ReadOnly)) {
+            // 流式发送：把 QIODevice 交给 responder 边读边发，避免 readAll()
+            // 把整个文件读进内存（>2G 会因 QByteArray 上限而崩溃）。responder
+            // 会在发送结束后接管并释放该 QFile；同时挂到 m_server 上，确保异常
+            // 路径（如连接中断）也不会泄漏。
+            auto *f = new QFile(abs, m_server);
+            if (!f->open(QIODevice::ReadOnly)) {
+                delete f;
                 responder.write(QHttpServerResponder::StatusCode::NotFound);
                 return;
             }
-            const QByteArray data = f.readAll();
             QMimeDatabase db;
             const QString mime = db.mimeTypeForFile(abs).name();
             const QString disp = QStringLiteral("attachment; filename*=UTF-8''%1")
@@ -618,7 +666,7 @@ void FileServer::handleRequest(const QHttpServerRequest &request, QHttpServerRes
             QHttpHeaders hdr;
             hdr.append(QHttpHeaders::WellKnownHeader::ContentType, mime.toLatin1());
             hdr.append(QHttpHeaders::WellKnownHeader::ContentDisposition, disp.toLatin1());
-            responder.write(data, hdr, QHttpServerResponder::StatusCode::Ok);
+            responder.write(f, hdr, QHttpServerResponder::StatusCode::Ok);
         } else {
             responder.write(QHttpServerResponder::StatusCode::NotFound);
         }
@@ -655,18 +703,71 @@ void FileServer::handleRequest(const QHttpServerRequest &request, QHttpServerRes
                 return;
             }
             const QString target = QDir(dirAbs).filePath(name);
+
+            // 分片上传：带 offset（与可选 total）时只接收一块并写入指定偏移，
+            // 服务端不再把整个文件读进 QByteArray（QByteArray 上限 2G，更大文件会崩溃）。
+            const QString offStr = query.queryItemValue(QStringLiteral("offset"));
+            const QString totalStr = query.queryItemValue(QStringLiteral("total"));
+            const QByteArray body = request.body();
+            const bool chunked = !offStr.isEmpty();
+            qint64 offset = 0;
+            qint64 total = body.size();
+            if (chunked) {
+                bool ok = false;
+                offset = offStr.toLongLong(&ok);
+                if (!ok || offset < 0) {
+                    responder.write(QHttpServerResponder::StatusCode::BadRequest);
+                    return;
+                }
+                bool okTotal = false;
+                const qint64 t = totalStr.toLongLong(&okTotal);
+                if (okTotal && t > 0)
+                    total = t;
+            }
+
             QFile f(target);
-            if (!f.open(QIODevice::WriteOnly)) {
+            // 分片模式用 ReadWrite 以便 seek 到 offset；首块（offset==0）清空旧内容，
+            // 这样重试同一块是幂等的。非分片模式 WriteOnly 即截断写入。
+            if (!f.open(chunked ? QIODevice::ReadWrite : QIODevice::WriteOnly)) {
                 responder.write(QHttpServerResponder::StatusCode::InternalServerError);
                 return;
             }
-            f.write(request.body());
+            if (chunked && offset == 0)
+                f.resize(0);
+            if (chunked && !f.seek(offset)) {
+                responder.write(QHttpServerResponder::StatusCode::InternalServerError);
+                return;
+            }
+            const qint64 written = f.write(body);
             f.close();
-            emit logMessage(tr("Web 上传：%1").arg(target));
+            if (written != body.size()) {
+                responder.write(QHttpServerResponder::StatusCode::InternalServerError);
+                return;
+            }
+
+            const bool last = !chunked || (offset + written >= total);
+            if (offset == 0 && !last) {
+                emit logMessage(tr("Web 上传开始：%1").arg(target));
+            } else if (last) {
+                emit logMessage(tr("Web 上传完成：%1").arg(target));
+            }
+
             QHttpHeaders hdr;
-            hdr.append(QHttpHeaders::WellKnownHeader::ContentType,
-                       QByteArray("text/plain; charset=utf-8"));
-            responder.write(QByteArrayLiteral("OK"), hdr, QHttpServerResponder::StatusCode::Ok);
+            if (chunked) {
+                // 回写本次写入位置，便于客户端校验/续传。
+                hdr.append(QHttpHeaders::WellKnownHeader::ContentType,
+                           QByteArray("application/json; charset=utf-8"));
+                responder.write(QJsonDocument(QJsonObject{
+                                                  {QStringLiteral("offset"), offset},
+                                                  {QStringLiteral("received"), written}})
+                                    .toJson(QJsonDocument::Compact),
+                                hdr, QHttpServerResponder::StatusCode::Ok);
+            } else {
+                hdr.append(QHttpHeaders::WellKnownHeader::ContentType,
+                           QByteArray("text/plain; charset=utf-8"));
+                responder.write(QByteArrayLiteral("OK"), hdr,
+                                QHttpServerResponder::StatusCode::Ok);
+            }
         } else {
             if (name.isEmpty() || !QDir(dirAbs).mkdir(name)) {
                 responder.write(QHttpServerResponder::StatusCode::BadRequest);

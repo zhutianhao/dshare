@@ -34,6 +34,7 @@ class QModelIndex;
 QT_END_NAMESPACE
 
 #include <DComboBox>
+#include <QHash>
 
 class FileListView;
 class UpDirProxy;
@@ -86,8 +87,10 @@ private:
                        const QString &authHeader = QString());
     void downloadRemoteFile(const QString &ip, quint16 port, const QString &relPath,
                             const QString &name, const QString &destDir);
-    bool uploadLocalFile(const QString &localPath, const QString &destRel,
-                         const QString &authHeader = QString());
+    // 批量上传到当前远程目录：弹出进度窗口，分片传输并显示实时进度。
+    void uploadFilesToRemote(const QStringList &localPaths, const QString &destRel);
+    // 丢弃某次下载已写入的临时文件（如需要重新发起请求时）。
+    void discardDownload(QNetworkReply *reply);
 
 private:
     QString currentDir() const;
@@ -140,6 +143,8 @@ private:
     int m_currentMachine = 0;
     bool m_remoteSecure = true; // 当前远程共享所用协议是否为 HTTPS
     QNetworkAccessManager *m_xfer = nullptr;
+    // 下载中的临时文件（边收边写，reply -> 输出文件）
+    QHash<QNetworkReply *, QFile *> m_dlFiles;
 
     // 当前共享目录对应的网页访问地址（供二维码使用）。
     QString currentShareUrl() const;

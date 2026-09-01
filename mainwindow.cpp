@@ -35,6 +35,7 @@
 #include <QVBoxLayout>
 
 #include "discovery.h"
+#include "fileuploader.h"
 #include "finddialog.h"
 #include "remotemodel.h"
 
@@ -532,22 +533,24 @@ void MainWindow::onFilesDropped(const QMimeData *mime, const QModelIndex &index,
             m_msgLabel->setText(tr("不支持在远程视图内拖动"));
             return;
         }
-        // 拖入本地文件 → 上传到当前远程机器
+        // 拖入本地文件 → 上传到当前远程机器（弹出进度窗口，分片传输）
         if (!mime->hasUrls()) {
             m_msgLabel->setText(tr("不支持的操作"));
             return;
         }
         const QString destRel = remoteDropTargetRel(index);
-        int done = 0;
+        QStringList files;
         for (const QUrl &u : mime->urls()) {
             const QString src = u.toLocalFile();
-            if (src.isEmpty())
+            if (src.isEmpty() || !QFileInfo(src).isFile())
                 continue;
-            if (uploadLocalFile(src, destRel))
-                ++done;
+            files.append(src);
         }
-        if (done > 0)
-            m_msgLabel->setText(tr("已上传 %n 项，正在刷新远程目录…", "", done));
+        if (files.isEmpty()) {
+            m_msgLabel->setText(tr("没有可上传的文件"));
+            return;
+        }
+        uploadFilesToRemote(files, destRel);
         return;
     }
 
@@ -639,6 +642,23 @@ void MainWindow::startDownload(const QString &ip, quint16 port, const QString &r
     QNetworkReply *reply = m_xfer->get(req);
     connect(reply, &QNetworkReply::sslErrors, reply,
             [reply](const QList<QSslError> &) { reply->ignoreSslErrors(); });
+
+    // 边收边写：不再把整个响应读进内存（>2G 会因 QByteArray 上限崩溃）。
+    // 先写 <目标>.part，成功后改名为目标文件，失败则丢弃临时文件。
+    const QString tmpPath = destPath + QStringLiteral(".part");
+    auto *out = new QFile(tmpPath, reply);
+    if (!out->open(QIODevice::WriteOnly)) {
+        m_msgLabel->setText(tr("无法写入：%1").arg(tmpPath));
+        delete out;
+        reply->abort();
+        reply->deleteLater();
+        return;
+    }
+    m_dlFiles.insert(reply, out);
+    connect(reply, &QIODevice::readyRead, this, [out, reply]() {
+        out->write(reply->readAll());
+    });
+
     reply->setProperty("op", QStringLiteral("download"));
     reply->setProperty("ip", ip);
     reply->setProperty("port", port);
@@ -663,44 +683,23 @@ void MainWindow::onRemoteFileDragged(const RemoteFileRef &ref, const QString &ca
     startDownload(ref.ip, ref.port, ref.relPath, ref.name, cachePath, false);
 }
 
-bool MainWindow::uploadLocalFile(const QString &localPath, const QString &destRel,
-                                  const QString &authHeader)
+void MainWindow::uploadFilesToRemote(const QStringList &localPaths, const QString &destRel)
 {
-    QFile f(localPath);
-    if (!f.open(QIODevice::ReadOnly))
-        return false;
-    const QFileInfo fi(localPath);
-    const QString name = fi.fileName();
-    const QString ip = m_remoteModel->remoteIp();
-    const quint16 port = m_remoteModel->remotePort();
-    QUrl url;
-    url.setScheme(m_remoteSecure ? QStringLiteral("https") : QStringLiteral("http"));
-    url.setHost(ip);
-    url.setPort(port);
-    url.setPath(QStringLiteral("/upload") + (destRel.isEmpty() ? QStringLiteral("/") : destRel));
-    QUrlQuery q;
-    q.addQueryItem(QStringLiteral("name"), name);
-    url.setQuery(q);
-    QNetworkRequest req(url);
-    QString header = authHeader;
-    if (header.isEmpty() && m_auth)
-        header = m_auth->headerFor(ip, port);
-    if (!header.isEmpty())
-        req.setRawHeader(QByteArrayLiteral("Authorization"), header.toUtf8());
-    const QByteArray data = f.readAll();
-    f.close();
-    QNetworkReply *reply = m_xfer->post(req, data);
-    connect(reply, &QNetworkReply::sslErrors, reply,
-            [reply](const QList<QSslError> &) { reply->ignoreSslErrors(); });
-    reply->setProperty("op", QStringLiteral("upload"));
-    reply->setProperty("name", name);
-    reply->setProperty("ip", ip);
-    reply->setProperty("port", port);
-    reply->setProperty("localPath", localPath);
-    reply->setProperty("destRel", destRel);
-    reply->setProperty("authTried", !header.isEmpty());
-    m_msgLabel->setText(tr("正在上传：%1").arg(name));
-    return true;
+    if (localPaths.isEmpty() || !m_remoteModel)
+        return;
+
+    auto *dlg = new UploadProgressDialog(this);
+    connect(dlg, &UploadProgressDialog::finished, this, [this](int ok, int fail) {
+        if (m_remote)
+            m_remoteModel->refresh();
+        if (fail == 0)
+            m_msgLabel->setText(tr("已上传 %n 个文件", "", ok));
+        else
+            m_msgLabel->setText(tr("上传完成：成功 %1 个，失败 %2 个")
+                                    .arg(QString::number(ok), QString::number(fail)));
+    });
+    dlg->upload(m_remoteModel->machineName(), m_remoteModel->remoteIp(),
+                m_remoteModel->remotePort(), m_remoteSecure, destRel, localPaths, m_auth);
 }
 
 void MainWindow::onTransferFinished(QNetworkReply *reply)
@@ -709,60 +708,73 @@ void MainWindow::onTransferFinished(QNetworkReply *reply)
         return;
     const QString op = reply->property("op").toString();
     const QString name = reply->property("name").toString();
-    const QByteArray data = reply->readAll();
     // 需要授权（401）且尚未尝试过授权：自动握手后带授权头重试一次。
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    if (status == 401 && !reply->property("authTried").toBool()
-        && (op == QStringLiteral("download") || op == QStringLiteral("upload"))) {
+    if (status == 401 && op == QStringLiteral("download")
+        && !reply->property("authTried").toBool()) {
         const QString ip = reply->property("ip").toString();
         const quint16 port = quint16(reply->property("port").toInt());
         const QString relPath = reply->property("relPath").toString();
         const QString destPath = reply->property("destPath").toString();
         const bool open = reply->property("open").toBool();
-        const QString localPath = reply->property("localPath").toString();
-        const QString destRel = reply->property("destRel").toString();
+        discardDownload(reply);
         m_msgLabel->setText(tr("需要授权，正在请求共享端批准…"));
         m_auth->ensureHeader(ip, port, m_remoteSecure, [=](const QString &header) {
             if (header.isEmpty()) {
-                m_msgLabel->setText(tr("授权被拒绝，无法%1：%2")
-                                       .arg(op == QStringLiteral("download") ? tr("下载") : tr("上传"), name));
+                m_msgLabel->setText(tr("授权被拒绝，无法下载：%1").arg(name));
                 return;
             }
-            if (op == QStringLiteral("download"))
-                startDownload(ip, port, relPath, name, destPath, open, header);
-            else
-                uploadLocalFile(localPath, destRel, header);
+            startDownload(ip, port, relPath, name, destPath, open, header);
         });
         reply->deleteLater();
         return;
     }
-    if (reply->error() != QNetworkReply::NoError) {
-        m_msgLabel->setText(tr("%1失败：%2").arg(op == QStringLiteral("download")
-                                                    ? tr("下载") : tr("上传"),
-                                                reply->errorString()));
+
+    if (op == QStringLiteral("download")) {
+        // 收尾：写入剩余数据并关闭，成功后由 .part 改名为目标文件。
+        QFile *out = m_dlFiles.take(reply);
+        const QString dest = reply->property("destPath").toString();
+        if (out)
+            out->write(reply->readAll());
+        const bool writeOk = out && out->error() == QFile::NoError;
+        if (out) {
+            const QString tmp = out->fileName();
+            delete out;
+            if (!writeOk || reply->error() != QNetworkReply::NoError) {
+                QFile::remove(tmp);
+                m_msgLabel->setText(tr("下载失败：%1").arg(reply->errorString()));
+                reply->deleteLater();
+                return;
+            }
+            QFile::remove(dest);
+            if (!QFile::rename(tmp, dest)) {
+                QFile::remove(tmp);
+                m_msgLabel->setText(tr("保存失败：%1").arg(dest));
+                reply->deleteLater();
+                return;
+            }
+            m_msgLabel->setText(tr("已下载：%1").arg(name));
+            if (reply->property("open").toBool())
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dest));
+            refreshView();
+        } else {
+            m_msgLabel->setText(tr("下载失败：%1").arg(reply->errorString()));
+        }
         reply->deleteLater();
         return;
     }
-    if (op == QStringLiteral("download")) {
-        const QString dest = reply->property("destPath").toString();
-        QFile out(dest);
-        if (out.open(QIODevice::WriteOnly) && out.write(data) == data.size()) {
-            out.close();
-            m_msgLabel->setText(tr("已下载：%1").arg(name));
-            if (reply->property("open").toBool()) {
-                // 双击下载后执行默认操作（用系统默认程序打开）
-                QDesktopServices::openUrl(QUrl::fromLocalFile(dest));
-            }
-            refreshView();
-        } else {
-            m_msgLabel->setText(tr("保存失败：%1").arg(dest));
-        }
-    } else if (op == QStringLiteral("upload")) {
-        m_msgLabel->setText(tr("已上传：%1").arg(name));
-        if (m_remote)
-            m_remoteModel->refresh();
-    }
+
     reply->deleteLater();
+}
+
+// 丢弃某次下载已写入的临时文件（如需要重新发起请求时）。
+void MainWindow::discardDownload(QNetworkReply *reply)
+{
+    if (QFile *out = m_dlFiles.take(reply)) {
+        const QString tmp = out->fileName();
+        delete out;
+        QFile::remove(tmp);
+    }
 }
 
 

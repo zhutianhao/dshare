@@ -17,6 +17,8 @@ add_executable(dshare
     main.cpp
     mainwindow.cpp
     fileserver.cpp
+    fileuploader.cpp
+    fileuploader.h
     authmanager.cpp
     authmanager.h
     updirproxy.h
