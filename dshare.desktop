@@ -1,10 +1,16 @@
 [Desktop Entry]
 Type=Application
+Version=1.0
 Name=DShare
 Name[zh_CN]=DShare
+GenericName=File Sharing
+GenericName[zh_CN]=文件共享
 Comment=基于 DTK 开发的 deepin 桌面文件共享工具，在本地浏览共享目录，并通过浏览器共享文件
 Comment[zh_CN]=基于 DTK 开发的 deepin 桌面文件共享工具，在本地浏览共享目录，并通过浏览器共享文件
 Exec=dshare
-Icon=folder
+Icon=dshare
 Terminal=false
-Categories=Utility;FileTools;
+StartupNotify=false
+Categories=Network;FileTransfer;
+Keywords=share;LAN;http;file;ftp;network;共享;局域网;
+Keywords[zh_CN]=共享;局域网;文件传输;传输;

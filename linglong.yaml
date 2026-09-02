@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: 2026 zhutianhao <zhutianhao75@hotmail.com>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# 如意玲珑（linyaps / linglong）构建描述。
+#
+# 构建：
+#   sudo apt install -y linglong-builder
+#   ll-builder build
+#   ll-builder export --layer          # 产出 *_binary.layer（商店投稿用这个）
+#   ll-builder export -o dshare.uab    # 产出单文件离线包
+version: "1"
+
+package:
+  id: io.github.zhutianhao.dshare
+  name: dshare
+  # 玲珑要求四段版本号 MAJOR.MINOR.PATCH.TWEAK
+  version: 1.0.0.0
+  kind: app
+  description: |
+    DShare is a DTK-based LAN file sharing app for the deepin desktop. It shares
+    a local directory (~/myshare) over the LAN through a built-in HTTP/HTTPS web
+    server and provides a native DTK6 GUI for local file management. Features:
+    drag-and-drop local file management, browser-side browse/download/upload,
+    LAN peer discovery via UDP multicast, optional per-device authorization and
+    a QR code for mobile scan-to-open.
+
+base: org.deepin.base/25.2.2
+runtime: org.deepin.runtime.dtk/6.7.0
+
+command:
+  - dshare
+
+build: |
+  set -e
+
+  # 容器默认源（ci.deepin.com crimson/2510）里的 qt6-httpserver-dev 6.8.0-0deepin1
+  # 打包不完整，比社区源同包少三个文件：
+  #   qhttpserverwebsocketupgraderesponse.h
+  #   QHttpServerWebSocketUpgradeResponse
+  #   Qt6HttpServerVersionlessAliasTargets.cmake
+  # 缺它们 find_package(Qt6 COMPONENTS HttpServer) 与编译都会失败，因此临时挂上
+  # 社区源只升级这一个包，其余构建依赖仍来自容器默认源。
+  echo "deb https://community-packages.deepin.com/beige/ crimson main" \
+      > /etc/apt/sources.list.d/deepin-community.list
+  apt-get update
+  apt-get install -y --no-install-recommends qt6-httpserver-dev
+
+  cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="${PREFIX}"
+  cmake --build build -j"$(nproc)"
+  cmake --install build --prefix "${PREFIX}"
+
+  # 下面几个库不在 base / dtk runtime 层里，必须随层带上，否则安装后 ldd 解析
+  # 不到、程序起不来。libQt6WebSockets 是 libQt6HttpServer 的传递依赖。
+  # 玲珑约定第三方库放在 lib/<triplet>。
+  TRIPLET=x86_64-linux-gnu
+  mkdir -p "${PREFIX}/lib/${TRIPLET}"
+  for lib in libQt6HttpServer libQt6WebSockets libqrencode; do
+    cp -a "/usr/lib/${TRIPLET}/${lib}.so."* "${PREFIX}/lib/${TRIPLET}/"
+  done
+
+  # 桌面项、图标、翻译随层一起发布。
+  # 玲珑要求桌面项文件名与图标名以 appid 为前缀，否则应用配置检查会告警、
+  # 商店也取不到图标，所以这里把 cmake 装好的 dshare.desktop 改名并同步 Icon。
+  APPID=io.github.zhutianhao.dshare
+  # cmake 已按 Icon=dshare 装过一份 dshare.desktop 和 dshare.svg，玲珑用的是
+  # appid 命名那一份，删掉避免冗余和重复菜单项
+  rm -f "${PREFIX}/share/applications/dshare.desktop" \
+        "${PREFIX}/share/icons/hicolor/scalable/apps/dshare.svg"
+  sed "s|^Icon=dshare\$|Icon=${APPID}|" dshare.desktop \
+      > "${PREFIX}/share/applications/${APPID}.desktop"
+  install -Dm644 icons/dshare.svg "${PREFIX}/share/icons/hicolor/scalable/apps/${APPID}.svg"
+  install -Dm644 translations/dshare_zh_CN.qm "${PREFIX}/share/dshare/translations/dshare_zh_CN.qm"
+
+buildext:
+  apt:
+    build_depends:
+      - cmake
+      - qt6-base-dev
+      - qt6-httpserver-dev
+      # Qt6HttpServer 的传递依赖，缺它 find_package(HttpServer) 会失败
+      - qt6-websockets-dev
+      - libdtk6core-dev
+      - libdtk6gui-dev
+      - libdtk6widget-dev
+      - libdtk6log-dev
+      - libqrencode-dev

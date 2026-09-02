@@ -1,0 +1,46 @@
+Source: dshare
+Section: utils
+Priority: optional
+Maintainer: zhutianhao <zhutianhao75@hotmail.com>
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13),
+ cmake,
+ qt6-base-dev,
+ qt6-httpserver-dev,
+ qt6-websockets-dev,
+ libdtk6core-dev,
+ libdtk6gui-dev,
+ libdtk6widget-dev,
+ libdtk6log-dev,
+ libqrencode-dev
+
+Package: dshare
+Architecture: any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ libqt6core6,
+ libqt6widgets6,
+ libqt6network6,
+ libqt6httpserver6,
+ libdtk6core,
+ libdtk6gui,
+ libdtk6widget,
+ libdtk6log,
+ libqrencode4,
+ openssl
+Description: DTK-based LAN file sharing app for deepin
+ DShare is a file sharing application built with DTK (Deepin Tool Kit) for the
+ deepin desktop. It shares a local directory (~/myshare) over the LAN through a
+ built-in HTTP/HTTPS web server and provides a native DTK6 GUI for local file
+ management.
+ .
+ Features:
+  * Browse, copy/paste, drag-and-drop, delete inside ~/myshare
+  * Browser-side browse, download and upload (plain HTTP, or HTTPS when the
+    optional authorization mode is on)
+  * LAN peer discovery via UDP multicast (port 5001, group 239.255.42.99)
+  * Optional per-device access authorization with desktop confirmation dialog
+  * Mobile scan-to-open the currently browsed folder via QR code

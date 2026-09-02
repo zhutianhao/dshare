@@ -44,6 +44,7 @@ target_link_libraries(dshare PRIVATE
 
 install(TARGETS dshare RUNTIME DESTINATION bin)
 install(FILES dshare.desktop DESTINATION share/applications)
+install(FILES icons/dshare.svg DESTINATION share/icons/hicolor/scalable/apps)
 
 # Translations: DApplication::loadTranslator() looks for <appName>_<locale>.qm in
 # AppDataLocation/translations (e.g. /usr/share/dshare/translations and

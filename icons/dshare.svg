@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"
+     role="img" aria-label="DShare">
+  <title>DShare</title>
+  <defs>
+    <linearGradient id="dshare-back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6FC3FF"/>
+      <stop offset="1" stop-color="#2A8CFF"/>
+    </linearGradient>
+    <linearGradient id="dshare-front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0081FF"/>
+      <stop offset="1" stop-color="#0055C8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- folder back plate with tab -->
+  <path d="M88 140h78a26 26 0 0 1 19 9l27 31h176a34 34 0 0 1 34 34v166a34 34 0 0 1-34 34H88a34 34 0 0 1-34-34V174a34 34 0 0 1 34-34z"
+        fill="url(#dshare-back)"/>
+
+  <!-- folder front panel -->
+  <path d="M54 224h404v168a34 34 0 0 1-34 34H88a34 34 0 0 1-34-34z"
+        fill="url(#dshare-front)"/>
+
+  <!-- share graph: one source node linked to two peers -->
+  <g stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" fill="none">
+    <path d="M314 283 204 350"/>
+    <path d="M340 298v38"/>
+  </g>
+  <g fill="#FFFFFF">
+    <circle cx="340" cy="268" r="30"/>
+    <circle cx="178" cy="366" r="30"/>
+    <circle cx="340" cy="366" r="30"/>
+  </g>
+</svg>

@@ -1,1 +1,18 @@
 build/
+obj-*/
+dist/
+
+debian/.debhelper/
+debian/dshare/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
+debian/*.debhelper
+
+*.layer
+*.uab
+.uabBuild/
+# ll-builder 的工作目录（构建缓存/overlay/输出），注意末尾斜杠只匹配目录，
+# 不会误伤源码文件 linglong.yaml
+linglong/
